@@ -1,0 +1,44 @@
+[
+  {
+    "Name": "tesseract.js",
+    "Version": "6.0.1",
+    "License": "Apache-2.0",
+    "Tarball": "https://registry.npmjs.org/tesseract.js/-/tesseract.js-6.0.1.tgz",
+    "Integrity": "sha512-/sPvMvrCtgxnNRCjbTYbr7BRu0yfWDsMZQ2a/T5aN/L1t8wUQN6tTWv6p6FwzpoEBA0jrN2UD2SX4QQFRdoDbA==",
+    "Dependencies": {
+      "bmp-js": "^0.1.0",
+      "is-url": "^1.2.4",
+      "zlibjs": "^0.3.1",
+      "idb-keyval": "^6.2.0",
+      "node-fetch": "^2.6.9",
+      "tesseract.js-core": "^6.0.0",
+      "regenerator-runtime": "^0.13.3",
+      "wasm-feature-detect": "^1.2.11",
+      "opencollective-postinstall": "^2.0.3"
+    }
+  },
+  {
+    "Name": "tesseract.js-core",
+    "Version": "6.1.2",
+    "License": "Apache-2.0",
+    "Tarball": "https://registry.npmjs.org/tesseract.js-core/-/tesseract.js-core-6.1.2.tgz",
+    "Integrity": "sha512-pv4GjmramjdObhDyR1q85Td8X60Puu/lGQn7Kw2id05LLgHhAcWgnz6xSdMCSxBMWjQDmMyDXPTC2aqADdpiow==",
+    "Dependencies": null
+  },
+  {
+    "Name": "@tesseract.js-data/kor",
+    "Version": "1.0.0",
+    "License": "MIT",
+    "Tarball": "https://registry.npmjs.org/@tesseract.js-data/kor/-/kor-1.0.0.tgz",
+    "Integrity": "sha512-tepYhsYiRJ8E44R27MHxVteEDDLfYQxuvM6u4JlEHcCYqwpefvI5TGzoMgB67kunOvtyEJYtT5zfJ/6R6FVU9w==",
+    "Dependencies": null
+  },
+  {
+    "Name": "@tesseract.js-data/eng",
+    "Version": "1.0.0",
+    "License": "MIT",
+    "Tarball": "https://registry.npmjs.org/@tesseract.js-data/eng/-/eng-1.0.0.tgz",
+    "Integrity": "sha512-mbTumm6KQPUHyzTPQaF3ObXYnx0SqqfV2nabqFVQBwD6Kl7PhGSLSzOlfFTWy0P3BjghaSKA2W9GB19Jk+ZcTg==",
+    "Dependencies": null
+  }
+]

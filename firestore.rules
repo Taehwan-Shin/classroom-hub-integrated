@@ -1,0 +1,212 @@
+rules_version = '2';
+// Data model: diaryVaults/{Auth UID} is an encrypted vault header.
+// Header: version=1, iterations=600000, salt(base64 24), iv(base64 16),
+// revision(UUID 36), count(1..12), createdAt(immutable), updatedAt(server time).
+// parts/{0..11}: revision(UUID 36), index(int), ciphertext(base64 <=700000).
+// No names, emails, dates, roles, or plaintext diary content are stored here.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAuthenticated() { return request.auth != null && request.auth.token.firebase.sign_in_provider == 'google.com'; }
+    function isOwner(uid) { return isAuthenticated() && request.auth.uid == uid; }
+    function isRevision(v) { return v is string && v.size() == 36 && v.matches('^[a-f0-9-]{36}$'); }
+    function isValidVault(d) {
+      return d.keys().hasAll(['version','iterations','salt','iv','revision','count','createdAt','updatedAt']) &&
+        d.keys().hasOnly(['version','iterations','salt','iv','revision','count','createdAt','updatedAt']) &&
+        d.version is int && d.version == 1 && d.iterations is int && d.iterations == 600000 &&
+        d.salt is string && d.salt.size() == 24 && d.salt.matches('^[A-Za-z0-9+/]{22}==$') &&
+        d.iv is string && d.iv.size() == 16 && d.iv.matches('^[A-Za-z0-9+/]{16}$') &&
+        isRevision(d.revision) && d.count is int && d.count >= 1 && d.count <= 12 &&
+        d.createdAt is timestamp && d.updatedAt is timestamp && d.updatedAt == request.time;
+    }
+    function isValidPart(uid, partId, d) {
+      let header = getAfter(/databases/$(database)/documents/diaryVaults/$(uid)).data;
+      return d.keys().hasAll(['revision','index','ciphertext']) && d.keys().hasOnly(['revision','index','ciphertext']) &&
+        isRevision(d.revision) && d.revision == header.revision &&
+        d.index is int && d.index >= 0 && d.index < header.count && partId == string(d.index) &&
+        d.ciphertext is string && d.ciphertext.size() >= 1 && d.ciphertext.size() <= 700000 &&
+        d.ciphertext.matches('^[A-Za-z0-9+/]+={0,2}$');
+    }
+    match /diaryVaults/{uid} {
+      allow get: if isOwner(uid);
+      allow list, delete: if false;
+      allow create: if isOwner(uid) && isValidVault(request.resource.data) && request.resource.data.createdAt == request.time;
+      allow update: if isOwner(uid) && isValidVault(request.resource.data) &&
+        request.resource.data.createdAt == resource.data.createdAt && request.resource.data.salt == resource.data.salt &&
+        request.resource.data.revision != resource.data.revision;
+      match /parts/{partId} {
+        allow get: if isOwner(uid);
+        allow list: if false;
+        allow create, update: if isOwner(uid) && isValidPart(uid, partId, request.resource.data);
+        allow delete: if isOwner(uid) && (!exists(/databases/$(database)/documents/diaryVaults/$(uid)/parts/$(partId)) ||
+          resource.data.index >= getAfter(/databases/$(database)/documents/diaryVaults/$(uid)).data.count);
+      }
+    }
+    // Public feedback contains only body and createdAt. No Auth UID or profile.
+    // Private writer/quota records contain synthetic identifiers and timestamps.
+    function feedbackAnonymous() {
+      return request.auth != null && request.auth.token.firebase.sign_in_provider == 'anonymous' &&
+        request.auth.token.get('hubRegistrar', false) != true;
+    }
+    function feedbackLocation(d) {
+      return d.hubId is string && d.hubId.matches('^issue-[1-9][0-9]{0,8}$') &&
+        d.commentId is string && d.commentId.matches('^[a-f0-9-]{36}$');
+    }
+    function feedbackNewComment(d) {
+      return feedbackLocation(d) &&
+        !exists(/databases/$(database)/documents/teacherHubFeedback/$(d.hubId)/comments/$(d.commentId)) &&
+        getAfter(/databases/$(database)/documents/teacherHubFeedback/$(d.hubId)/comments/$(d.commentId)).data.createdAt == request.time;
+    }
+    function validFeedback(d) {
+      return d.keys().hasAll(['body','createdAt']) && d.keys().hasOnly(['body','createdAt']) &&
+        d.body is string && d.body.size() >= 2 && d.body.size() <= 500 &&
+        !d.body.matches('^[ \\t\\r\\n]*$') &&
+        !d.body.matches('(?s).*[<>\\x00-\\x08\\x0b-\\x1f\\x7f\\x{202a}-\\x{202e}\\x{2066}-\\x{2069}].*') &&
+        !d.body.matches('(?si).*[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}.*') &&
+        !d.body.matches('(?s).*(01[016789]|0[2-6][1-5]?)[ -]?[0-9]{3,4}[ -]?[0-9]{4}.*') &&
+        !d.body.matches('(?s).*[0-9]{6}[ -]?[1-4][0-9]{6}.*') &&
+        !d.body.matches('(?si).*(https?://|www\\.|(api[_ -]?key|access[_ -]?token|password|비밀번호)[ ]*[:=]).*') &&
+        d.createdAt is timestamp && d.createdAt == request.time;
+    }
+    function feedbackPaired(hubId,commentId) {
+      let writer = getAfter(/databases/$(database)/documents/teacherHubFeedbackWriters/$(request.auth.uid)).data;
+      let quota = getAfter(/databases/$(database)/documents/teacherHubFeedbackQuota/global).data;
+      return writer.hubId == hubId && writer.commentId == commentId && writer.updatedAt == request.time &&
+        quota.hubId == hubId && quota.commentId == commentId && quota.updatedAt == request.time;
+    }
+    function validFeedbackWriter(d) {
+      return d.keys().hasAll(['hubId','commentId','updatedAt']) && d.keys().hasOnly(['hubId','commentId','updatedAt']) &&
+        d.updatedAt is timestamp && d.updatedAt == request.time && feedbackNewComment(d);
+    }
+    function validFeedbackQuota(d) {
+      return d.keys().hasAll(['hubId','commentId','updatedAt','windowStart','count']) &&
+        d.keys().hasOnly(['hubId','commentId','updatedAt','windowStart','count']) &&
+        d.updatedAt is timestamp && d.updatedAt == request.time &&
+        d.windowStart is timestamp && d.count is int && d.count >= 1 && d.count <= 100 && feedbackNewComment(d);
+    }
+    match /teacherHubFeedback/{hubId}/comments/{commentId} {
+      allow get: if hubId.matches('^issue-[1-9][0-9]{0,8}$');
+      allow list: if hubId.matches('^issue-[1-9][0-9]{0,8}$') && request.query.limit != null && request.query.limit >= 1 && request.query.limit <= 21;
+      allow create: if feedbackAnonymous() && hubId.matches('^issue-[1-9][0-9]{0,8}$') &&
+        commentId.matches('^[a-f0-9-]{36}$') && validFeedback(request.resource.data) && feedbackPaired(hubId,commentId);
+      allow update: if false;
+      allow delete: if request.auth != null &&
+        request.auth.token.firebase.sign_in_provider == 'password' &&
+        request.auth.token.get('feedbackModerator', false) == true;
+    }
+    match /teacherHubFeedbackWriters/{uid} {
+      allow get: if feedbackAnonymous() && request.auth.uid == uid;
+      allow list, delete: if false;
+      allow create: if feedbackAnonymous() && request.auth.uid == uid && validFeedbackWriter(request.resource.data);
+      allow update: if feedbackAnonymous() && request.auth.uid == uid && validFeedbackWriter(request.resource.data) &&
+        request.time - resource.data.updatedAt >= duration.value(5, 's');
+    }
+    match /teacherHubFeedbackQuota/global {
+      allow get: if feedbackAnonymous();
+      allow list, delete: if false;
+      allow create: if feedbackAnonymous() && validFeedbackQuota(request.resource.data) &&
+        request.resource.data.count == 1 && request.resource.data.windowStart == request.time;
+      allow update: if feedbackAnonymous() && validFeedbackQuota(request.resource.data) &&
+        ((request.time - resource.data.windowStart < duration.value(3600, 's') &&
+          request.resource.data.windowStart == resource.data.windowStart && request.resource.data.count == resource.data.count + 1) ||
+        (request.time - resource.data.windowStart >= duration.value(3600, 's') &&
+          request.resource.data.windowStart == request.time && request.resource.data.count == 1));
+    }
+
+    // Private intake: requests contain only intended public hub data, a synthetic
+    // owner UID and server timestamps. Worker claim is assigned only by Admin.
+    // Requests: uid,hub,createdAt,state,issue,processedAt; immutable payload.
+    // Writers: requestId,updatedAt. Quota: requestId,updatedAt,hourStart,
+    // hourCount(1..60),dayStart,dayCount(1..200); atomic rolling windows.
+    function intakeWorker() {
+      return request.auth != null && request.auth.token.get('hubRegistrar', false) == true;
+    }
+    function intakeSender() { return feedbackAnonymous() && !intakeWorker(); }
+    function intakeText(v, maximum) {
+      return v is string && v.size() >= 1 && v.size() <= maximum &&
+        !v.matches('^[ \\t\\r\\n]*$') &&
+        !v.matches('(?s).*[<>\\x00-\\x1f\\x7f\\x{202a}-\\x{202e}\\x{2066}-\\x{2069}].*') &&
+        !v.matches('(?si).*[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}.*') &&
+        !v.matches('(?s).*(01[016789]|0[2-6][1-5]?)[ -]?[0-9]{3,4}[ -]?[0-9]{4}.*') &&
+        !v.matches('(?s).*[0-9]{6}[ -]?[1-4][0-9]{6}.*') &&
+        !v.matches('(?si).*(api[_ -]?key|access[_ -]?token|password|비밀번호)[ ]*[:=].*');
+    }
+    function intakeHub(h) {
+      return h is map && h.keys().hasAll(['title','description','url','category','symbol']) &&
+        h.keys().hasOnly(['title','description','url','category','symbol']) &&
+        intakeText(h.title,40) && intakeText(h.description,160) &&
+        h.url is string && h.url.size() <= 500 &&
+        h.url.matches('^https://[a-zA-Z0-9][a-zA-Z0-9.-]*\\.[a-zA-Z]{2,}(/[^?#@: <>\\\\\\x00-\\x20]*)?$') &&
+        !h.url.matches('(?si)^https://[^/]*\\.(local|internal|test|invalid|example|onion)(/.*)?$') &&
+        h.category in ['수업 도구','교과 학습','학급 운영','창작 활동','종합 허브'] &&
+        h.symbol in ['sun','moon','star','book','compass'];
+    }
+    function intakeValidRequest(d) {
+      return d.keys().hasAll(['uid','hub','createdAt','state','issue','processedAt']) &&
+        d.keys().hasOnly(['uid','hub','createdAt','state','issue','processedAt']) &&
+        d.uid is string && d.uid.matches('^[-a-zA-Z0-9_]{1,128}$') && intakeHub(d.hub) &&
+        d.createdAt is timestamp && d.issue is int &&
+        ((d.state == 'queued' && d.issue == 0 && d.processedAt == null) ||
+        (d.state == 'issued' && d.issue >= 1 && d.issue <= 999999999 && d.processedAt is timestamp) ||
+        (d.state == 'rejected' && d.issue == 0 && d.processedAt is timestamp));
+    }
+    function intakeNew(id) {
+      return id is string && id.matches('^[a-f0-9-]{36}$') &&
+        !exists(/databases/$(database)/documents/teacherHubRequests/$(id)) &&
+        getAfter(/databases/$(database)/documents/teacherHubRequests/$(id)).data.uid == request.auth.uid &&
+        getAfter(/databases/$(database)/documents/teacherHubRequests/$(id)).data.createdAt == request.time;
+    }
+    function intakePair(id) {
+      let writer = getAfter(/databases/$(database)/documents/teacherHubRequestWriters/$(request.auth.uid)).data;
+      let quota = getAfter(/databases/$(database)/documents/teacherHubRequestQuota/global).data;
+      return writer.requestId == id && writer.updatedAt == request.time &&
+        quota.requestId == id && quota.updatedAt == request.time;
+    }
+    function intakeWriter(d) {
+      return d.keys().hasAll(['requestId','updatedAt']) && d.keys().hasOnly(['requestId','updatedAt']) &&
+        d.updatedAt is timestamp && d.updatedAt == request.time && intakeNew(d.requestId);
+    }
+    function intakeQuota(d) {
+      return d.keys().hasAll(['requestId','updatedAt','hourStart','hourCount','dayStart','dayCount']) &&
+        d.keys().hasOnly(['requestId','updatedAt','hourStart','hourCount','dayStart','dayCount']) &&
+        d.updatedAt is timestamp && d.updatedAt == request.time &&
+        d.hourStart is timestamp && d.dayStart is timestamp &&
+        d.hourCount is int && d.hourCount >= 1 && d.hourCount <= 60 &&
+        d.dayCount is int && d.dayCount >= 1 && d.dayCount <= 200 && intakeNew(d.requestId);
+    }
+    function intakeWindow(start,count,oldStart,oldCount,seconds) {
+      return (request.time - oldStart < duration.value(seconds,'s') && start == oldStart && count == oldCount+1) ||
+        (request.time - oldStart >= duration.value(seconds,'s') && start == request.time && count == 1);
+    }
+    match /teacherHubRequests/{id} {
+      allow get: if intakeWorker() || (intakeSender() && resource.data.uid == request.auth.uid);
+      allow list: if intakeWorker() && request.query.limit != null && request.query.limit >= 1 && request.query.limit <= 20;
+      allow create: if intakeSender() && id.matches('^[a-f0-9-]{36}$') && intakeValidRequest(request.resource.data) &&
+        request.resource.data.uid == request.auth.uid && request.resource.data.createdAt == request.time &&
+        request.resource.data.state == 'queued' && intakePair(id);
+      allow update: if intakeWorker() && intakeValidRequest(request.resource.data) && resource.data.state == 'queued' &&
+        request.resource.data.state in ['issued','rejected'] && request.resource.data.processedAt == request.time &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['state','issue','processedAt']);
+      allow delete: if intakeWorker() && resource.data.state != 'queued' &&
+        resource.data.processedAt is timestamp && request.time - resource.data.processedAt >= duration.value(604800,'s');
+    }
+    match /teacherHubRequestWriters/{uid} {
+      allow get: if intakeSender() && uid == request.auth.uid;
+      allow create: if intakeSender() && uid == request.auth.uid && intakeWriter(request.resource.data);
+      allow update: if intakeSender() && uid == request.auth.uid && intakeWriter(request.resource.data) &&
+        request.time - resource.data.updatedAt >= duration.value(60,'s');
+      allow list,delete: if false;
+    }
+    match /teacherHubRequestQuota/global {
+      allow get: if intakeSender();
+      allow create: if intakeSender() && intakeQuota(request.resource.data) &&
+        request.resource.data.hourStart == request.time && request.resource.data.dayStart == request.time &&
+        request.resource.data.hourCount == 1 && request.resource.data.dayCount == 1;
+      allow update: if intakeSender() && intakeQuota(request.resource.data) &&
+        intakeWindow(request.resource.data.hourStart,request.resource.data.hourCount,resource.data.hourStart,resource.data.hourCount,3600) &&
+        intakeWindow(request.resource.data.dayStart,request.resource.data.dayCount,resource.data.dayStart,resource.data.dayCount,86400);
+      allow list,delete: if false;
+    }
+
+    match /{document=**} { allow read, write: if false; }
+  }
+}

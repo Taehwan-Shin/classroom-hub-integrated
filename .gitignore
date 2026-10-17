@@ -1,0 +1,26 @@
+/qa/
+/tmp/
+/data/
+/build/
+.env
+.env.*
+!.env.example
+/node_modules/
+/.firebase/
+firebase-debug*.log
+firestore-debug*.log
+
+# Local hosting metadata, credentials, diagnostic output and backups.
+/.openai/
+/.vercel/
+*.log
+*.pem
+*.key
+*.p12
+*.pfx
+*service-account*.json
+*serviceAccount*.json
+firebase-adminsdk*.json
+*.bak
+*.backup
+*.tmp
